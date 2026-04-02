@@ -22,8 +22,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_DATASET_DIR = ROOT / "output" / "l-ge-cap-ferret-gironde-france-fov-360"
 CUBE_FACE_FOV_DEGREES = 90.0
 EARTH_RADIUS_METERS = 6_378_137.0
-CLASS_SIGN = "panneau"
-CLASS_SUBSIGN = "panonceau"
+MAIN_SIGN_CLASSES = {"panneau", "sign"}
+SECONDARY_SIGN_CLASSES = {"panonceau", "plate"}
+IGNORED_CLASSES = {"face"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,12 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest-path", type=pathlib.Path)
     parser.add_argument("--items-path", type=pathlib.Path)
     parser.add_argument("--output-dir", type=pathlib.Path)
-    parser.add_argument("--detector-repo", default="Panoramax/detect_fr_road_signs_subsigns")
+    parser.add_argument("--detector-repo", default="Panoramax/detect_face_plate_sign")
     parser.add_argument("--classifier-repo", default="Panoramax/classify_fr_road_signs")
-    parser.add_argument("--detector-filename", default="best.pt")
+    parser.add_argument("--detector-filename", default="yolo11l_panoramax.pt")
     parser.add_argument("--classifier-filename", default="best.pt")
-    parser.add_argument("--detector-conf", type=float, default=0.25)
-    parser.add_argument("--detector-imgsz", type=int, default=960)
+    parser.add_argument("--detector-conf", type=float, default=0.5)
+    parser.add_argument("--detector-imgsz", type=int, default=2048)
     parser.add_argument("--detector-batch", type=int, default=8)
     parser.add_argument("--classifier-imgsz", type=int, default=224)
     parser.add_argument("--classifier-batch", type=int, default=24)
@@ -228,6 +229,9 @@ def main() -> int:
             for index, box in enumerate(result.boxes):
                 cls_index = int(box.cls.item())
                 detector_label = detector.names[cls_index]
+                if detector_label in IGNORED_CLASSES:
+                    continue
+
                 detector_score = float(box.conf.item())
                 x1, y1, x2, y2 = [float(value) for value in box.xyxy[0].tolist()]
                 crop_left, crop_top, crop_right, crop_bottom = crop_bounds(
@@ -295,7 +299,7 @@ def main() -> int:
                 }
                 observations.append(observation)
 
-                if detector_label == CLASS_SIGN:
+                if detector_label in MAIN_SIGN_CLASSES:
                     crops_to_classify.append(
                         {
                             "observation_id": observation_id,
@@ -344,7 +348,9 @@ def main() -> int:
 
     for observation in observations:
         if observation["classification"] is None:
-            observation["classification_family"] = "SUBSIGN" if observation["detector_class"] == CLASS_SUBSIGN else "UNKNOWN"
+            observation["classification_family"] = (
+                "SUBSIGN" if observation["detector_class"] in SECONDARY_SIGN_CLASSES else "UNKNOWN"
+            )
             observation["display_label"] = observation["detector_class"]
         else:
             observation["classification_family"] = observation["classification"]["family"]
@@ -355,8 +361,10 @@ def main() -> int:
         "device": device,
         "faces_processed": len(face_records),
         "observations_count": len(observations),
-        "sign_count": sum(1 for observation in observations if observation["detector_class"] == CLASS_SIGN),
-        "subsign_count": sum(1 for observation in observations if observation["detector_class"] == CLASS_SUBSIGN),
+        "sign_count": sum(1 for observation in observations if observation["detector_class"] in MAIN_SIGN_CLASSES),
+        "subsign_count": sum(
+            1 for observation in observations if observation["detector_class"] in SECONDARY_SIGN_CLASSES
+        ),
         "classified_count": sum(1 for observation in observations if observation["classification"] is not None),
         "sources_with_detections": len({observation["source_id"] for observation in observations}),
         "family_counts": dict(Counter(observation["classification_family"] for observation in observations).most_common()),

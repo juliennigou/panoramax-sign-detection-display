@@ -14,6 +14,7 @@ from PIL import Image
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_DATASET_DIR = ROOT / "output" / "l-ge-cap-ferret-gironde-france-fov-360"
+MAIN_SIGN_CLASSES = {"sign", "panneau"}
 FAMILY_PALETTE = [
     "#ef476f",
     "#118ab2",
@@ -26,6 +27,18 @@ FAMILY_PALETTE = [
     "#fb5607",
     "#6a994e",
 ]
+LABEL_PALETTE = [
+    "#ef476f",
+    "#118ab2",
+    "#06d6a0",
+    "#f78c6b",
+    "#8338ec",
+    "#3a86ff",
+    "#fb5607",
+    "#6a994e",
+    "#ff006e",
+    "#ffd166",
+]
 
 
 def parse_args() -> Any:
@@ -35,8 +48,10 @@ def parse_args() -> Any:
     parser.add_argument("--dataset-dir", type=pathlib.Path, default=DEFAULT_DATASET_DIR)
     parser.add_argument("--observations-path", type=pathlib.Path)
     parser.add_argument("--summary-path", type=pathlib.Path)
+    parser.add_argument("--faces-manifest-path", type=pathlib.Path)
     parser.add_argument("--app-data-dir", type=pathlib.Path, default=ROOT / "coverage-map" / "public" / "data")
     parser.add_argument("--preview-max-size", type=int, default=320)
+    parser.add_argument("--face-preview-size", type=int, default=420)
     return parser.parse_args()
 
 
@@ -59,6 +74,12 @@ def family_colors(observations: list[dict[str, Any]]) -> dict[str, str]:
     return {family: FAMILY_PALETTE[index % len(FAMILY_PALETTE)] for index, family in enumerate(ordered)}
 
 
+def label_colors(observations: list[dict[str, Any]]) -> dict[str, str]:
+    counts = Counter(observation["display_label"] for observation in observations)
+    ordered = [label for label, _count in counts.most_common()]
+    return {label: LABEL_PALETTE[index % len(LABEL_PALETTE)] for index, label in enumerate(ordered)}
+
+
 def make_preview(source_path: pathlib.Path, target_path: pathlib.Path, max_size: int) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(source_path) as image:
@@ -72,16 +93,39 @@ def main() -> int:
     dataset_dir = resolve_path(args.dataset_dir)
     observations_path = resolve_path(args.observations_path or dataset_dir / "sign_inference" / "observations.json")
     summary_path = resolve_path(args.summary_path or dataset_dir / "sign_inference" / "summary.json")
+    faces_manifest_path = resolve_path(
+        args.faces_manifest_path or dataset_dir / "cubemap_faces_horizontal" / "cubemap_horizontal_manifest.json"
+    )
     app_data_dir = resolve_path(args.app_data_dir)
 
-    observations = read_json(observations_path)["items"]
+    raw_observations = read_json(observations_path)["items"]
     summary = read_json(summary_path)
-    colors = family_colors(observations)
+    faces_manifest = read_json(faces_manifest_path)["items"]
+    observations = [observation for observation in raw_observations if observation["detector_class"] in MAIN_SIGN_CLASSES]
+    family_color_index = family_colors(observations)
+    label_color_index = label_colors(observations)
 
     preview_dir = app_data_dir / "sign_previews"
     if preview_dir.exists():
         shutil.rmtree(preview_dir)
     preview_dir.mkdir(parents=True, exist_ok=True)
+
+    review_faces_dir = app_data_dir / "review_faces"
+    if review_faces_dir.exists():
+        shutil.rmtree(review_faces_dir)
+    review_faces_dir.mkdir(parents=True, exist_ok=True)
+
+    face_index: dict[str, dict[str, str]] = {}
+    for entry in faces_manifest:
+        source_id = entry["source_id"]
+        previews: dict[str, str] = {}
+        for face in entry["faces"]:
+            face_name = face["face_name"]
+            source_face_path = resolve_path(pathlib.Path(face["path"]))
+            target_face_path = review_faces_dir / source_id / f"{face_name}.jpg"
+            make_preview(source_face_path, target_face_path, args.face_preview_size)
+            previews[face_name] = f"/data/review_faces/{source_id}/{face_name}.jpg"
+        face_index[source_id] = previews
 
     point_features = []
     ray_features = []
@@ -110,7 +154,8 @@ def main() -> int:
             "classificationConfidence": observation["classification"]["confidence"] if observation["classification"] else None,
             "classificationFamily": observation["classification_family"],
             "displayLabel": observation["display_label"],
-            "familyColor": colors[observation["classification_family"]],
+            "familyColor": family_color_index[observation["classification_family"]],
+            "labelColor": label_color_index[observation["display_label"]],
             "worldAzimuth": observation["world_azimuth"],
             "rayLengthM": observation["ray_length_m"],
             "cropUrl": preview_url,
@@ -151,17 +196,17 @@ def main() -> int:
         {
             "family": family,
             "count": count,
-            "color": colors[family],
+            "color": family_color_index[family],
         }
         for family, count in Counter(observation["classification_family"] for observation in observations).most_common()
     ]
 
     sign_summary = {
-        "observationsCount": summary["observations_count"],
-        "signCount": summary["sign_count"],
-        "subsignCount": summary["subsign_count"],
-        "classifiedCount": summary["classified_count"],
-        "sourcesWithDetections": summary["sources_with_detections"],
+        "observationsCount": len(observations),
+        "signCount": len(observations),
+        "subsignCount": 0,
+        "classifiedCount": sum(1 for observation in observations if observation.get("classification") is not None),
+        "sourcesWithDetections": len({observation["source_id"] for observation in observations}),
         "rayLengthM": summary["ray_length_m"],
         "familyStats": family_stats,
     }
@@ -169,12 +214,14 @@ def main() -> int:
     write_json(app_data_dir / "sample_sign_points.geojson", {"type": "FeatureCollection", "features": point_features})
     write_json(app_data_dir / "sample_sign_rays.geojson", {"type": "FeatureCollection", "features": ray_features})
     write_json(app_data_dir / "sample_sign_summary.json", sign_summary)
+    write_json(app_data_dir / "sample_face_index.json", face_index)
 
     print("Generated sign assets:")
-    for name in ("sample_sign_points.geojson", "sample_sign_rays.geojson", "sample_sign_summary.json"):
+    for name in ("sample_sign_points.geojson", "sample_sign_rays.geojson", "sample_sign_summary.json", "sample_face_index.json"):
         path = app_data_dir / name
         print(f"  {name}: {path.stat().st_size} bytes")
     print(f"  previews: {len(point_features)} files in {preview_dir}")
+    print(f"  review faces: {len(face_index)} sources in {review_faces_dir}")
     return 0
 
 

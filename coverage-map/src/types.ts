@@ -95,6 +95,7 @@ export type SignObservationProperties = {
   classificationFamily: string
   displayLabel: string
   familyColor: string
+  labelColor: string
   worldAzimuth: number
   rayLengthM: number
   cropUrl: string
@@ -115,6 +116,8 @@ export type SignPreparedData = {
   rays: SignObservationRays
   summary: SignSummary
 }
+
+export type FacePreviewIndex = Record<string, Partial<Record<'front' | 'right' | 'back' | 'left', string>>>
 
 export type QueryPayload = {
   place_query: string

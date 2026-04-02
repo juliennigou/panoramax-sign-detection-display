@@ -5,12 +5,15 @@ import type { FilterSpecification, LngLatBoundsLike, MapLayerMouseEvent } from '
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
 
+import { ImageReviewPage } from './components/ImageReviewPage'
 import { formatConfidence, formatDate, formatDegrees, formatProviderLabel } from './lib/coverage'
+import { formatSignCode, formatSignFamily } from './lib/signs'
 import type {
   CoverageLineProperties,
   CoveragePointProperties,
   CoveragePreparedData,
   CoverageStats,
+  FacePreviewIndex,
   QueryPayload,
   SignObservationProperties,
   SignPreparedData,
@@ -22,6 +25,7 @@ const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty'
 const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
 type CoverageMode = 'sample' | 'full'
+type AppView = 'map' | 'review'
 
 type InitialLoadState =
   | { status: 'loading' }
@@ -31,6 +35,7 @@ type InitialLoadState =
       query: QueryPayload
       summary: SummaryPayload
       signData: SignPreparedData | null
+      faceIndex: FacePreviewIndex
     }
   | { status: 'error'; message: string }
 
@@ -108,7 +113,7 @@ function observationPopupMarkup(properties: SignObservationProperties) {
 
   const classifierLine = properties.classificationLabel
     ? `<div class="popup-meta-row">
-        <span>${escapeHtml(properties.classificationLabel)}</span>
+        <span>${escapeHtml(formatSignCode(properties.classificationLabel))}</span>
         <span>${escapeHtml(formatConfidence(properties.classificationConfidence))}</span>
       </div>`
     : ''
@@ -116,7 +121,7 @@ function observationPopupMarkup(properties: SignObservationProperties) {
   return `<div class="popup-card popup-rich">
     <img class="popup-thumb popup-thumb-square" src="${escapeHtml(properties.cropUrl)}" alt="${escapeHtml(properties.displayLabel)}" />
     <div class="popup-copy">
-      <strong>${escapeHtml(properties.displayLabel)}</strong>
+      <strong>${escapeHtml(formatSignCode(properties.displayLabel))}</strong>
       <span>${escapeHtml(`${properties.faceName} face · ${formatDegrees(properties.worldAzimuth)}`)}</span>
       <code>${escapeHtml(properties.observationId)}</code>
       <div class="popup-meta-row">
@@ -173,6 +178,20 @@ async function loadSignFiles(): Promise<SignPreparedData | null> {
   return { points, rays, summary }
 }
 
+async function loadFaceIndex(): Promise<FacePreviewIndex> {
+  const response = await fetch('/data/sample_face_index.json')
+
+  if (response.status === 404) {
+    return {}
+  }
+
+  if (!response.ok) {
+    throw new Error('Face preview index could not be loaded.')
+  }
+
+  return (await response.json()) as FacePreviewIndex
+}
+
 function App() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -189,17 +208,38 @@ function App() {
   const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null)
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null)
   const [selectedObservationId, setSelectedObservationId] = useState<string | null>(null)
+  const [appView, setAppView] = useState<AppView>(() => (window.location.hash === '#review' ? 'review' : 'map'))
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setAppView(window.location.hash === '#review' ? 'review' : 'map')
+    }
+
+    window.addEventListener('hashchange', handleHashChange)
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange)
+    }
+  }, [])
+
+  const showView = (view: AppView) => {
+    const nextHash = view === 'review' ? '#review' : ''
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${nextHash}`)
+    }
+    setAppView(view)
+  }
 
   useEffect(() => {
     let cancelled = false
 
     async function load() {
       try {
-        const [sampleCoverage, queryResponse, summaryResponse, signData] = await Promise.all([
+        const [sampleCoverage, queryResponse, summaryResponse, signData, faceIndex] = await Promise.all([
           loadCoverageFiles('sample'),
           fetch('/data/query.json'),
           fetch('/data/summary.json'),
           loadSignFiles(),
+          loadFaceIndex(),
         ])
 
         if (!queryResponse.ok || !summaryResponse.ok) {
@@ -212,7 +252,7 @@ function App() {
         ])
 
         if (!cancelled) {
-          setLoadState({ status: 'ready', sampleCoverage, query, summary, signData })
+          setLoadState({ status: 'ready', sampleCoverage, query, summary, signData, faceIndex })
         }
       } catch (error) {
         if (!cancelled) {
@@ -351,7 +391,7 @@ function App() {
   }, [coverageMode])
 
   useEffect(() => {
-    if (!mapContainerRef.current || !coverage || loadState.status !== 'ready' || mapRef.current) {
+    if (appView !== 'map' || !mapContainerRef.current || !coverage || loadState.status !== 'ready' || mapRef.current) {
       return
     }
 
@@ -397,7 +437,7 @@ function App() {
         type: 'line',
         source: 'sign-rays',
         layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
-        paint: { 'line-color': ['get', 'familyColor'], 'line-opacity': 0.14, 'line-width': 8, 'line-blur': 4 },
+        paint: { 'line-color': ['get', 'labelColor'], 'line-opacity': 0.14, 'line-width': 8, 'line-blur': 4 },
       })
 
       map.addLayer({
@@ -406,7 +446,7 @@ function App() {
         source: 'sign-rays',
         layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
         paint: {
-          'line-color': ['get', 'familyColor'],
+          'line-color': ['get', 'labelColor'],
           'line-opacity': 0.72,
           'line-width': 2.4,
           'line-dasharray': [1.4, 1.15],
@@ -473,7 +513,7 @@ function App() {
         layout: { visibility: 'none' },
         paint: {
           'circle-radius': 4.5,
-          'circle-color': ['get', 'familyColor'],
+          'circle-color': ['get', 'labelColor'],
           'circle-stroke-width': 1.25,
           'circle-stroke-color': '#11233b',
         },
@@ -598,7 +638,7 @@ function App() {
       map.remove()
       mapRef.current = null
     }
-  }, [coverage, loadState, observationCountBySourceId, showPoints, showRoutes, signData])
+  }, [appView, coverage, loadState, observationCountBySourceId, showPoints, showRoutes, signData])
 
   useEffect(() => {
     const map = mapRef.current
@@ -732,12 +772,28 @@ function App() {
   const fullModeBlocked = coverageMode === 'full' && fullLoadState.status === 'error'
   const coverageUnavailable = coverageMode === 'full' && fullLoadState.status !== 'ready'
 
+  if (appView === 'review') {
+    return (
+      <ImageReviewPage
+        sampleCoverage={loadState.sampleCoverage}
+        signData={loadState.signData}
+        faceIndex={loadState.faceIndex}
+        onShowMap={() => showView('map')}
+        onShowReview={() => showView('review')}
+      />
+    )
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-inner">
           <div className="hero-panel">
             <p className="eyebrow">Panoramax Coverage</p>
+            <div className="view-switch">
+              <button className="view-switch-button active" onClick={() => showView('map')}>Map</button>
+              <button className="view-switch-button" onClick={() => showView('review')}>Image Review</button>
+            </div>
             <h1>Route Footprint & Sign Review</h1>
             <p className="hero-copy">
               A 2D view of the sampled Lège-Cap-Ferret panoramas, with collection routes, inferred sign observations,
@@ -874,10 +930,10 @@ function App() {
                   </label>
                 </div>
                 <div className="family-chip-grid">
-                  {signData.summary.familyStats.slice(0, 8).map((family) => (
+                    {signData.summary.familyStats.slice(0, 8).map((family) => (
                     <span key={family.family} className="family-chip" style={{ ['--chip-color' as string]: family.color }}>
                       <span className="color-swatch" />
-                      <span>{family.family}</span>
+                      <span>{formatSignFamily(family.family)}</span>
                       <strong>{family.count}</strong>
                     </span>
                   ))}
@@ -949,7 +1005,7 @@ function App() {
                     style={{ background: selectedObservation.properties.familyColor ?? '#ef476f' }}
                   />
                 </div>
-                <strong>{selectedObservation.properties.displayLabel}</strong>
+                <strong>{formatSignCode(selectedObservation.properties.displayLabel)}</strong>
                 <code>{selectedObservation.properties.observationId}</code>
                 <dl className="detail-grid">
                   <div>
@@ -971,7 +1027,7 @@ function App() {
                     <dt>Classifier</dt>
                     <dd>
                       {selectedObservation.properties.classificationLabel
-                        ? `${selectedObservation.properties.classificationLabel} · ${formatConfidence(selectedObservation.properties.classificationConfidence)}`
+                        ? `${formatSignCode(selectedObservation.properties.classificationLabel)} · ${formatConfidence(selectedObservation.properties.classificationConfidence)}`
                         : 'not classified'}
                     </dd>
                   </div>
@@ -991,7 +1047,7 @@ function App() {
                   <div className="top-classes">
                     {selectedObservation.properties.topClasses.map((candidate) => (
                       <div key={`${selectedObservation.properties.observationId}-${candidate.label}`} className="top-class-row">
-                        <span>{candidate.label}</span>
+                        <span>{formatSignCode(candidate.label)}</span>
                         <strong>{formatConfidence(candidate.confidence)}</strong>
                       </div>
                     ))}
@@ -1068,7 +1124,7 @@ function App() {
                       >
                         <img src={feature.properties?.cropUrl} alt={feature.properties?.displayLabel} />
                         <div>
-                          <strong>{feature.properties?.displayLabel}</strong>
+                          <strong>{formatSignCode(feature.properties?.displayLabel)}</strong>
                           <span>
                             {feature.properties?.faceName} · {formatDegrees(feature.properties?.worldAzimuth)}
                           </span>
