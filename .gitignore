@@ -1,0 +1,12 @@
+.DS_Store
+.idea/
+.vscode/
+
+output/
+
+coverage-map/node_modules/
+coverage-map/dist/
+coverage-map/.vite/
+
+*.pyc
+__pycache__/

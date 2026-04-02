@@ -1,0 +1,13 @@
+{
+  "place_query": "L\u00e8ge-Cap-Ferret, Gironde, France",
+  "resolved_place": "L\u00e8ge-Cap-Ferret, Arcachon, Gironde, Nouvelle-Aquitaine, France m\u00e9tropolitaine, France",
+  "collections_intersecting_bbox": 347,
+  "collections_with_matching_items": 66,
+  "matching_items": 21675,
+  "providers_with_matching_items": 4,
+  "selected_items": 100,
+  "downloaded_items": 100,
+  "downloaded_total_bytes": 313145291,
+  "downloaded_total_gb": 0.292,
+  "output_dir": "output/l-ge-cap-ferret-gironde-france-fov-360"
+}

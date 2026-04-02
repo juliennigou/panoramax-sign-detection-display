@@ -1,0 +1,24 @@
+{
+  "place_query": "L\u00e8ge-Cap-Ferret, Gironde, France",
+  "resolved_place": "L\u00e8ge-Cap-Ferret, Arcachon, Gironde, Nouvelle-Aquitaine, France m\u00e9tropolitaine, France",
+  "center": {
+    "lat": 44.7951052,
+    "lon": -1.1472098
+  },
+  "raw_boundingbox_nominatim": {
+    "south": 44.6204375,
+    "north": 44.8287096,
+    "west": -1.2613787,
+    "east": -1.050092
+  },
+  "search_bbox": {
+    "min_lon": -1.2813787,
+    "min_lat": 44.6004375,
+    "max_lon": -1.030092,
+    "max_lat": 44.84870960000001
+  },
+  "panoramax_api_base": "https://api.panoramax.xyz/api",
+  "quality": "hd",
+  "field_of_view": 360,
+  "download_count": 100
+}
