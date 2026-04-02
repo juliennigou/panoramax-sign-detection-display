@@ -55,6 +55,67 @@ export type CoveragePreparedData = {
   stats: CoverageStats
 }
 
+export type FamilyStat = {
+  family: string
+  count: number
+  color: string
+}
+
+export type SignSummary = {
+  observationsCount: number
+  signCount: number
+  subsignCount: number
+  classifiedCount: number
+  sourcesWithDetections: number
+  rayLengthM: number
+  familyStats: FamilyStat[]
+}
+
+export type SignTopClass = {
+  label: string
+  confidence: number
+}
+
+export type SignObservationProperties = {
+  observationId: string
+  sourceId: string
+  collectionId: string
+  provider: string
+  datetime: string
+  sourceLon: number
+  sourceLat: number
+  sourceAzimuth: number | null
+  horizontalAccuracy: number | null
+  faceName: string
+  faceYaw: number
+  detectorClass: string
+  detectorScore: number
+  classificationLabel: string | null
+  classificationConfidence: number | null
+  classificationFamily: string
+  displayLabel: string
+  familyColor: string
+  worldAzimuth: number
+  rayLengthM: number
+  cropUrl: string
+  sourceThumbUrl: string | null
+  sourceAssetUrl: string | null
+  sourceItemUrl: string | null
+  sourceOriginalName: string | null
+  bboxXyxy: number[]
+  bboxXywhNorm: number[]
+  topClasses: SignTopClass[]
+}
+
+export type SignObservationPoints = FeatureCollection<Point, SignObservationProperties>
+export type SignObservationRays = FeatureCollection<LineString, SignObservationProperties>
+
+export type SignPreparedData = {
+  points: SignObservationPoints
+  rays: SignObservationRays
+  summary: SignSummary
+}
+
 export type QueryPayload = {
   place_query: string
   resolved_place: string

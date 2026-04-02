@@ -183,6 +183,10 @@
   gap: 0.7rem;
 }
 
+.top-gap {
+  margin-top: 0.9rem;
+}
+
 .toggle-card {
   display: flex;
   align-items: center;
@@ -319,6 +323,11 @@
   border: 1px solid rgba(17, 35, 59, 0.08);
 }
 
+.detail-thumb-square,
+.popup-thumb-square {
+  aspect-ratio: 1 / 1;
+}
+
 .detail-card code {
   display: inline-block;
   padding: 0.3rem 0.45rem;
@@ -366,6 +375,90 @@
   color: #0f4c5c;
   text-decoration: none;
   font-weight: 600;
+}
+
+.family-chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.9rem;
+}
+
+.family-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 35, 59, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  color: #304456;
+  font-size: 0.8rem;
+}
+
+.family-chip strong {
+  color: #13263d;
+}
+
+.top-classes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.top-class-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.85rem;
+  background: rgba(17, 35, 59, 0.04);
+}
+
+.top-class-row span {
+  color: #304456;
+}
+
+.top-class-row strong {
+  margin: 0;
+}
+
+.observation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.observation-card {
+  display: grid;
+  grid-template-columns: 4.8rem 1fr;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.55rem;
+  border-radius: 0.95rem;
+  border: 1px solid rgba(17, 35, 59, 0.08);
+  background: rgba(17, 35, 59, 0.03);
+  text-align: left;
+  cursor: pointer;
+}
+
+.observation-card img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 0.75rem;
+}
+
+.observation-card strong {
+  margin: 0;
+}
+
+.observation-card span {
+  display: block;
+  margin-top: 0.2rem;
+  color: #4d5f70;
+  font-size: 0.84rem;
 }
 
 .map-stage {

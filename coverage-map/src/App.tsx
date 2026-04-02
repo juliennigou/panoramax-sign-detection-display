@@ -1,20 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import maplibregl, { GeoJSONSource, Map } from 'maplibre-gl'
+import maplibregl, { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl'
+import type { FeatureCollection } from 'geojson'
 import type { FilterSpecification, LngLatBoundsLike, MapLayerMouseEvent } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
 
-import { formatDate, formatProviderLabel } from './lib/coverage'
+import { formatConfidence, formatDate, formatDegrees, formatProviderLabel } from './lib/coverage'
 import type {
   CoverageLineProperties,
   CoveragePointProperties,
   CoveragePreparedData,
   CoverageStats,
   QueryPayload,
+  SignObservationProperties,
+  SignPreparedData,
+  SignSummary,
   SummaryPayload,
 } from './types'
 
 const BASEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty'
+const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: 'FeatureCollection', features: [] }
 
 type CoverageMode = 'sample' | 'full'
 
@@ -25,6 +30,7 @@ type InitialLoadState =
       sampleCoverage: CoveragePreparedData
       query: QueryPayload
       summary: SummaryPayload
+      signData: SignPreparedData | null
     }
   | { status: 'error'; message: string }
 
@@ -51,7 +57,7 @@ function escapeHtml(value: unknown) {
     .replaceAll("'", '&#39;')
 }
 
-function popupMarkup(properties: CoveragePointProperties) {
+function popupMarkup(properties: CoveragePointProperties, detectionCount: number) {
   const thumb = properties.thumbUrl
     ? `<img class="popup-thumb" src="${escapeHtml(properties.thumbUrl)}" alt="${escapeHtml(properties.originalName ?? properties.id)}" />`
     : ''
@@ -67,6 +73,11 @@ function popupMarkup(properties: CoveragePointProperties) {
     .filter(Boolean)
     .join(' · ')
 
+  const detectionLine =
+    detectionCount > 0
+      ? `<div class="popup-meta-row"><span>${escapeHtml(`${detectionCount} sign observation${detectionCount === 1 ? '' : 's'}`)}</span></div>`
+      : ''
+
   return `<div class="popup-card popup-rich">
     ${thumb}
     <div class="popup-copy">
@@ -77,6 +88,42 @@ function popupMarkup(properties: CoveragePointProperties) {
         <span>${escapeHtml(properties.collectionId)}</span>
         <span>${escapeHtml(`${properties.lon.toFixed(5)}, ${properties.lat.toFixed(5)}`)}</span>
       </div>
+      ${detectionLine}
+      <div class="popup-links">${links}</div>
+    </div>
+  </div>`
+}
+
+function observationPopupMarkup(properties: SignObservationProperties) {
+  const links = [
+    properties.sourceAssetUrl
+      ? `<a href="${escapeHtml(properties.sourceAssetUrl)}" target="_blank" rel="noreferrer">source image</a>`
+      : '',
+    properties.sourceItemUrl
+      ? `<a href="${escapeHtml(properties.sourceItemUrl)}" target="_blank" rel="noreferrer">stac item</a>`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const classifierLine = properties.classificationLabel
+    ? `<div class="popup-meta-row">
+        <span>${escapeHtml(properties.classificationLabel)}</span>
+        <span>${escapeHtml(formatConfidence(properties.classificationConfidence))}</span>
+      </div>`
+    : ''
+
+  return `<div class="popup-card popup-rich">
+    <img class="popup-thumb popup-thumb-square" src="${escapeHtml(properties.cropUrl)}" alt="${escapeHtml(properties.displayLabel)}" />
+    <div class="popup-copy">
+      <strong>${escapeHtml(properties.displayLabel)}</strong>
+      <span>${escapeHtml(`${properties.faceName} face · ${formatDegrees(properties.worldAzimuth)}`)}</span>
+      <code>${escapeHtml(properties.observationId)}</code>
+      <div class="popup-meta-row">
+        <span>${escapeHtml(properties.detectorClass)}</span>
+        <span>${escapeHtml(formatConfidence(properties.detectorScore))}</span>
+      </div>
+      ${classifierLine}
       <div class="popup-links">${links}</div>
     </div>
   </div>`
@@ -102,9 +149,33 @@ async function loadCoverageFiles(prefix: 'sample' | 'full'): Promise<CoveragePre
   return { points, lines, stats }
 }
 
+async function loadSignFiles(): Promise<SignPreparedData | null> {
+  const [pointsResponse, raysResponse, summaryResponse] = await Promise.all([
+    fetch('/data/sample_sign_points.geojson'),
+    fetch('/data/sample_sign_rays.geojson'),
+    fetch('/data/sample_sign_summary.json'),
+  ])
+
+  if (pointsResponse.status === 404 || raysResponse.status === 404 || summaryResponse.status === 404) {
+    return null
+  }
+
+  if (!pointsResponse.ok || !raysResponse.ok || !summaryResponse.ok) {
+    throw new Error('Sign inference assets could not be loaded.')
+  }
+
+  const [points, rays, summary] = await Promise.all([
+    pointsResponse.json(),
+    raysResponse.json(),
+    summaryResponse.json() as Promise<SignSummary>,
+  ])
+
+  return { points, rays, summary }
+}
+
 function App() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
-  const mapRef = useRef<Map | null>(null)
+  const mapRef = useRef<MapLibreMap | null>(null)
   const popupRef = useRef<maplibregl.Popup | null>(null)
 
   const [loadState, setLoadState] = useState<InitialLoadState>({ status: 'loading' })
@@ -113,18 +184,22 @@ function App() {
   const [selectedProvider, setSelectedProvider] = useState<string>('all')
   const [showPoints, setShowPoints] = useState(true)
   const [showRoutes, setShowRoutes] = useState(true)
+  const [showSignMarkers, setShowSignMarkers] = useState(true)
+  const [showSignRays, setShowSignRays] = useState(true)
   const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null)
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null)
+  const [selectedObservationId, setSelectedObservationId] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
 
     async function load() {
       try {
-        const [sampleCoverage, queryResponse, summaryResponse] = await Promise.all([
+        const [sampleCoverage, queryResponse, summaryResponse, signData] = await Promise.all([
           loadCoverageFiles('sample'),
           fetch('/data/query.json'),
           fetch('/data/summary.json'),
+          loadSignFiles(),
         ])
 
         if (!queryResponse.ok || !summaryResponse.ok) {
@@ -137,7 +212,7 @@ function App() {
         ])
 
         if (!cancelled) {
-          setLoadState({ status: 'ready', sampleCoverage, query, summary })
+          setLoadState({ status: 'ready', sampleCoverage, query, summary, signData })
         }
       } catch (error) {
         if (!cancelled) {
@@ -203,6 +278,42 @@ function App() {
     return null
   }, [coverageMode, fullLoadState, loadState])
 
+  const signData = loadState.status === 'ready' ? loadState.signData : null
+
+  const observationsBySourceId = useMemo(() => {
+    const map = new globalThis.Map<string, NonNullable<SignPreparedData>['points']['features']>()
+    if (!signData) {
+      return map
+    }
+
+    for (const feature of signData.points.features) {
+      const sourceId = feature.properties?.sourceId
+      if (!sourceId) {
+        continue
+      }
+      const items = map.get(sourceId)
+      if (items) {
+        items.push(feature)
+      } else {
+        map.set(sourceId, [feature])
+      }
+    }
+
+    for (const features of map.values()) {
+      features.sort((left, right) => (left.properties?.displayLabel ?? '').localeCompare(right.properties?.displayLabel ?? ''))
+    }
+
+    return map
+  }, [signData])
+
+  const observationCountBySourceId = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const [sourceId, features] of observationsBySourceId.entries()) {
+      counts.set(sourceId, features.length)
+    }
+    return counts
+  }, [observationsBySourceId])
+
   const selectedPoint = useMemo(() => {
     if (!coverage || !selectedPointId) {
       return null
@@ -217,10 +328,26 @@ function App() {
     return coverage.lines.features.find((feature) => feature.properties?.collectionId === selectedCollectionId) ?? null
   }, [coverage, selectedCollectionId])
 
+  const selectedObservation = useMemo(() => {
+    if (!signData || !selectedObservationId) {
+      return null
+    }
+    return signData.points.features.find((feature) => feature.properties?.observationId === selectedObservationId) ?? null
+  }, [selectedObservationId, signData])
+
+  const selectedSourceObservations = useMemo(() => {
+    const sourceId = selectedObservation?.properties?.sourceId ?? selectedPointId
+    if (!sourceId) {
+      return []
+    }
+    return observationsBySourceId.get(sourceId) ?? []
+  }, [observationsBySourceId, selectedObservation, selectedPointId])
+
   useEffect(() => {
     popupRef.current?.remove()
     setSelectedCollectionId(null)
     setSelectedPointId(null)
+    setSelectedObservationId(null)
   }, [coverageMode])
 
   useEffect(() => {
@@ -242,8 +369,12 @@ function App() {
     map.on('load', () => {
       map.addSource('coverage-routes', { type: 'geojson', data: coverage.lines })
       map.addSource('coverage-points', { type: 'geojson', data: coverage.points })
-      map.addSource('selected-route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
-      map.addSource('selected-point', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      map.addSource('selected-route', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addSource('selected-point', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addSource('sign-rays', { type: 'geojson', data: signData?.rays ?? EMPTY_FEATURE_COLLECTION })
+      map.addSource('sign-points', { type: 'geojson', data: signData?.points ?? EMPTY_FEATURE_COLLECTION })
+      map.addSource('selected-sign-ray', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addSource('selected-sign-point', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
 
       map.addLayer({
         id: 'route-glow',
@@ -259,6 +390,27 @@ function App() {
         source: 'coverage-routes',
         layout: { 'line-cap': 'round', 'line-join': 'round', visibility: showRoutes ? 'visible' : 'none' },
         paint: { 'line-color': ['get', 'providerColor'], 'line-opacity': 0.82, 'line-width': 3.25 },
+      })
+
+      map.addLayer({
+        id: 'sign-ray-glow',
+        type: 'line',
+        source: 'sign-rays',
+        layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
+        paint: { 'line-color': ['get', 'familyColor'], 'line-opacity': 0.14, 'line-width': 8, 'line-blur': 4 },
+      })
+
+      map.addLayer({
+        id: 'sign-rays',
+        type: 'line',
+        source: 'sign-rays',
+        layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
+        paint: {
+          'line-color': ['get', 'familyColor'],
+          'line-opacity': 0.72,
+          'line-width': 2.4,
+          'line-dasharray': [1.4, 1.15],
+        },
       })
 
       map.addLayer({
@@ -302,6 +454,51 @@ function App() {
         },
       })
 
+      map.addLayer({
+        id: 'sign-point-halo',
+        type: 'circle',
+        source: 'sign-points',
+        layout: { visibility: 'none' },
+        paint: {
+          'circle-radius': 7,
+          'circle-color': '#fff9ef',
+          'circle-opacity': 0.9,
+        },
+      })
+
+      map.addLayer({
+        id: 'sign-points',
+        type: 'circle',
+        source: 'sign-points',
+        layout: { visibility: 'none' },
+        paint: {
+          'circle-radius': 4.5,
+          'circle-color': ['get', 'familyColor'],
+          'circle-stroke-width': 1.25,
+          'circle-stroke-color': '#11233b',
+        },
+      })
+
+      map.addLayer({
+        id: 'selected-sign-ray',
+        type: 'line',
+        source: 'selected-sign-ray',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#fff7d6', 'line-width': 5, 'line-opacity': 0.96 },
+      })
+
+      map.addLayer({
+        id: 'selected-sign-point',
+        type: 'circle',
+        source: 'selected-sign-point',
+        paint: {
+          'circle-radius': 8.5,
+          'circle-color': '#fff7d6',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#11233b',
+        },
+      })
+
       map.fitBounds(coverage.stats.mapBounds as LngLatBoundsLike, { padding: fitPadding(), duration: 0 })
 
       map.on('click', 'point-dots', (event: MapLayerMouseEvent) => {
@@ -315,6 +512,7 @@ function App() {
 
         setSelectedPointId(properties.id)
         setSelectedCollectionId(properties.collectionId)
+        setSelectedObservationId(null)
 
         popupRef.current?.remove()
         popupRef.current = new maplibregl.Popup({
@@ -325,7 +523,7 @@ function App() {
           maxWidth: '320px',
         })
           .setLngLat(coordinates)
-          .setHTML(popupMarkup(properties))
+          .setHTML(popupMarkup(properties, observationCountBySourceId.get(properties.id) ?? 0))
           .addTo(map)
       })
 
@@ -338,21 +536,58 @@ function App() {
         const properties = feature.properties as unknown as CoverageLineProperties
         setSelectedCollectionId(properties.collectionId)
         setSelectedPointId(null)
+        setSelectedObservationId(null)
         popupRef.current?.remove()
       })
 
-      map.on('mouseenter', 'point-dots', () => {
-        map.getCanvas().style.cursor = 'pointer'
+      const selectObservation = (properties: SignObservationProperties, coordinates: [number, number]) => {
+        setSelectedObservationId(properties.observationId)
+        setSelectedPointId(properties.sourceId)
+        setSelectedCollectionId(properties.collectionId)
+
+        popupRef.current?.remove()
+        popupRef.current = new maplibregl.Popup({
+          closeButton: false,
+          closeOnMove: false,
+          className: 'sample-popup',
+          offset: 18,
+          maxWidth: '320px',
+        })
+          .setLngLat(coordinates)
+          .setHTML(observationPopupMarkup(properties))
+          .addTo(map)
+      }
+
+      map.on('click', 'sign-points', (event: MapLayerMouseEvent) => {
+        const feature = event.features?.[0]
+        if (!feature?.properties || feature.geometry.type !== 'Point') {
+          return
+        }
+
+        const properties = feature.properties as unknown as SignObservationProperties
+        const coordinates = [...feature.geometry.coordinates] as [number, number]
+        selectObservation(properties, coordinates)
       })
-      map.on('mouseleave', 'point-dots', () => {
-        map.getCanvas().style.cursor = ''
+
+      map.on('click', 'sign-rays', (event: MapLayerMouseEvent) => {
+        const feature = event.features?.[0]
+        if (!feature?.properties || feature.geometry.type !== 'LineString') {
+          return
+        }
+
+        const properties = feature.properties as unknown as SignObservationProperties
+        const lastCoordinate = feature.geometry.coordinates[feature.geometry.coordinates.length - 1] as [number, number]
+        selectObservation(properties, lastCoordinate)
       })
-      map.on('mouseenter', 'route-lines', () => {
-        map.getCanvas().style.cursor = 'pointer'
-      })
-      map.on('mouseleave', 'route-lines', () => {
-        map.getCanvas().style.cursor = ''
-      })
+
+      for (const layerId of ['point-dots', 'route-lines', 'sign-points', 'sign-rays']) {
+        map.on('mouseenter', layerId, () => {
+          map.getCanvas().style.cursor = 'pointer'
+        })
+        map.on('mouseleave', layerId, () => {
+          map.getCanvas().style.cursor = ''
+        })
+      }
     })
 
     mapRef.current = map
@@ -363,7 +598,7 @@ function App() {
       map.remove()
       mapRef.current = null
     }
-  }, [coverage, loadState, showPoints, showRoutes])
+  }, [coverage, loadState, observationCountBySourceId, showPoints, showRoutes, signData])
 
   useEffect(() => {
     const map = mapRef.current
@@ -373,12 +608,17 @@ function App() {
 
     ;(map.getSource('coverage-routes') as GeoJSONSource | undefined)?.setData(coverage.lines)
     ;(map.getSource('coverage-points') as GeoJSONSource | undefined)?.setData(coverage.points)
+    ;(map.getSource('sign-rays') as GeoJSONSource | undefined)?.setData(signData?.rays ?? EMPTY_FEATURE_COLLECTION)
+    ;(map.getSource('sign-points') as GeoJSONSource | undefined)?.setData(signData?.points ?? EMPTY_FEATURE_COLLECTION)
 
     const providerFilter: FilterSpecification | null =
       selectedProvider === 'all' ? null : (['==', ['get', 'provider'], selectedProvider] as FilterSpecification)
 
     const lineVisibility = showRoutes ? 'visible' : 'none'
     const pointVisibility = showPoints ? 'visible' : 'none'
+    const signVisible = coverageMode === 'sample' && signData !== null
+    const signPointVisibility = signVisible && showSignMarkers ? 'visible' : 'none'
+    const signRayVisibility = signVisible && showSignRays ? 'visible' : 'none'
 
     if (map.getLayer('route-glow')) {
       map.setLayoutProperty('route-glow', 'visibility', lineVisibility)
@@ -396,6 +636,22 @@ function App() {
       map.setLayoutProperty('point-dots', 'visibility', pointVisibility)
       map.setFilter('point-dots', providerFilter)
     }
+    if (map.getLayer('sign-ray-glow')) {
+      map.setLayoutProperty('sign-ray-glow', 'visibility', signRayVisibility)
+      map.setFilter('sign-ray-glow', providerFilter)
+    }
+    if (map.getLayer('sign-rays')) {
+      map.setLayoutProperty('sign-rays', 'visibility', signRayVisibility)
+      map.setFilter('sign-rays', providerFilter)
+    }
+    if (map.getLayer('sign-point-halo')) {
+      map.setLayoutProperty('sign-point-halo', 'visibility', signPointVisibility)
+      map.setFilter('sign-point-halo', providerFilter)
+    }
+    if (map.getLayer('sign-points')) {
+      map.setLayoutProperty('sign-points', 'visibility', signPointVisibility)
+      map.setFilter('sign-points', providerFilter)
+    }
 
     ;(map.getSource('selected-route') as GeoJSONSource | undefined)?.setData({
       type: 'FeatureCollection',
@@ -411,7 +667,33 @@ function App() {
           ? []
           : coverage.points.features.filter((feature) => feature.properties?.id === selectedPointId),
     })
-  }, [coverage, selectedCollectionId, selectedPointId, selectedProvider, showPoints, showRoutes])
+    ;(map.getSource('selected-sign-ray') as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features:
+        selectedObservationId === null || !signData
+          ? []
+          : signData.rays.features.filter((feature) => feature.properties?.observationId === selectedObservationId),
+    })
+    ;(map.getSource('selected-sign-point') as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features:
+        selectedObservationId === null || !signData
+          ? []
+          : signData.points.features.filter((feature) => feature.properties?.observationId === selectedObservationId),
+    })
+  }, [
+    coverage,
+    coverageMode,
+    selectedCollectionId,
+    selectedObservationId,
+    selectedPointId,
+    selectedProvider,
+    showPoints,
+    showRoutes,
+    showSignMarkers,
+    showSignRays,
+    signData,
+  ])
 
   const fitToCoverage = () => {
     if (!mapRef.current || !coverage) {
@@ -429,7 +711,7 @@ function App() {
         <div className="loading-card">
           <p className="eyebrow">Panoramax Coverage</p>
           <h1>Loading sample coverage</h1>
-          <p>Preparing points, route segments, and map stats from the downloaded Lège-Cap-Ferret sample.</p>
+          <p>Preparing points, route segments, and inference overlays for the downloaded Lège-Cap-Ferret sample.</p>
         </div>
       </main>
     )
@@ -456,15 +738,16 @@ function App() {
         <div className="sidebar-inner">
           <div className="hero-panel">
             <p className="eyebrow">Panoramax Coverage</p>
-            <h1>Sample Route Footprint</h1>
+            <h1>Route Footprint & Sign Review</h1>
             <p className="hero-copy">
-              A 2D view of the selected Lège-Cap-Ferret panoramas, with route segments reconstructed from collection
-              sequences and timestamps.
+              A 2D view of the sampled Lège-Cap-Ferret panoramas, with collection routes, inferred sign observations,
+              and directional rays linked back to their source panoramas.
             </p>
             <div className="badge-row">
               <span className="pill pill-strong">{loadState.query.place_query}</span>
               <span className="pill">{coverageMode === 'sample' ? 'Sample mode' : 'Full mode'}</span>
               <span className="pill">{coverage?.stats.pointCount.toLocaleString() ?? '...'} visible images</span>
+              {signData && <span className="pill">{signData.summary.observationsCount.toLocaleString()} sign observations</span>}
             </div>
           </div>
 
@@ -545,6 +828,71 @@ function App() {
 
           <section className="panel">
             <div className="section-header">
+              <h2>Sign Inference</h2>
+            </div>
+            {signData ? (
+              <>
+                <div className="stats-grid">
+                  <article className="stat-card">
+                    <span className="stat-label">Observations</span>
+                    <strong>{signData.summary.observationsCount.toLocaleString()}</strong>
+                  </article>
+                  <article className="stat-card">
+                    <span className="stat-label">Main Signs</span>
+                    <strong>{signData.summary.signCount.toLocaleString()}</strong>
+                  </article>
+                  <article className="stat-card">
+                    <span className="stat-label">Sub-signs</span>
+                    <strong>{signData.summary.subsignCount.toLocaleString()}</strong>
+                  </article>
+                  <article className="stat-card">
+                    <span className="stat-label">Source Panos</span>
+                    <strong>{signData.summary.sourcesWithDetections.toLocaleString()}</strong>
+                  </article>
+                </div>
+                <p className="meta-line">
+                  Sample-only inference currently uses {Math.round(signData.summary.rayLengthM)} m directional rays.
+                </p>
+                <div className="toggle-grid top-gap">
+                  <label className="toggle-card">
+                    <input
+                      type="checkbox"
+                      checked={showSignMarkers}
+                      onChange={(event) => setShowSignMarkers(event.target.checked)}
+                      disabled={coverageMode !== 'sample'}
+                    />
+                    <span>Sign markers</span>
+                  </label>
+                  <label className="toggle-card">
+                    <input
+                      type="checkbox"
+                      checked={showSignRays}
+                      onChange={(event) => setShowSignRays(event.target.checked)}
+                      disabled={coverageMode !== 'sample'}
+                    />
+                    <span>Direction rays</span>
+                  </label>
+                </div>
+                <div className="family-chip-grid">
+                  {signData.summary.familyStats.slice(0, 8).map((family) => (
+                    <span key={family.family} className="family-chip" style={{ ['--chip-color' as string]: family.color }}>
+                      <span className="color-swatch" />
+                      <span>{family.family}</span>
+                      <strong>{family.count}</strong>
+                    </span>
+                  ))}
+                </div>
+                {coverageMode !== 'sample' && (
+                  <p className="subtle-note">Sign overlays are only rendered in sample mode until the full area is inferred.</p>
+                )}
+              </>
+            ) : (
+              <p className="subtle-note">No sign inference assets are present yet. Run the Python inference scripts to populate them.</p>
+            )}
+          </section>
+
+          <section className="panel">
+            <div className="section-header">
               <h2>Providers</h2>
             </div>
             <div className="provider-filter-grid">
@@ -573,12 +921,13 @@ function App() {
           <section className="panel detail-panel">
             <div className="section-header">
               <h2>Selection</h2>
-              {(selectedCollectionId || selectedPointId) && (
+              {(selectedCollectionId || selectedPointId || selectedObservationId) && (
                 <button
                   className="ghost-button"
                   onClick={() => {
                     setSelectedCollectionId(null)
                     setSelectedPointId(null)
+                    setSelectedObservationId(null)
                     popupRef.current?.remove()
                   }}
                 >
@@ -586,7 +935,82 @@ function App() {
                 </button>
               )}
             </div>
-            {selectedPoint?.properties ? (
+            {selectedObservation?.properties ? (
+              <div className="detail-card detail-card-rich">
+                <img
+                  className="detail-thumb detail-thumb-square"
+                  src={selectedObservation.properties.cropUrl}
+                  alt={selectedObservation.properties.displayLabel}
+                />
+                <div className="detail-title-row">
+                  <span className="detail-kicker">Sign observation</span>
+                  <span
+                    className="legend-dot"
+                    style={{ background: selectedObservation.properties.familyColor ?? '#ef476f' }}
+                  />
+                </div>
+                <strong>{selectedObservation.properties.displayLabel}</strong>
+                <code>{selectedObservation.properties.observationId}</code>
+                <dl className="detail-grid">
+                  <div>
+                    <dt>Detector</dt>
+                    <dd>
+                      {selectedObservation.properties.detectorClass} ·{' '}
+                      {formatConfidence(selectedObservation.properties.detectorScore)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Face</dt>
+                    <dd>{selectedObservation.properties.faceName}</dd>
+                  </div>
+                  <div>
+                    <dt>World azimuth</dt>
+                    <dd>{formatDegrees(selectedObservation.properties.worldAzimuth)}</dd>
+                  </div>
+                  <div>
+                    <dt>Classifier</dt>
+                    <dd>
+                      {selectedObservation.properties.classificationLabel
+                        ? `${selectedObservation.properties.classificationLabel} · ${formatConfidence(selectedObservation.properties.classificationConfidence)}`
+                        : 'not classified'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Source panorama</dt>
+                    <dd>{selectedObservation.properties.sourceId}</dd>
+                  </div>
+                  <div>
+                    <dt>Coordinates</dt>
+                    <dd>
+                      {selectedObservation.properties.sourceLon.toFixed(5)},{' '}
+                      {selectedObservation.properties.sourceLat.toFixed(5)}
+                    </dd>
+                  </div>
+                </dl>
+                {selectedObservation.properties.topClasses.length > 0 && (
+                  <div className="top-classes">
+                    {selectedObservation.properties.topClasses.map((candidate) => (
+                      <div key={`${selectedObservation.properties.observationId}-${candidate.label}`} className="top-class-row">
+                        <span>{candidate.label}</span>
+                        <strong>{formatConfidence(candidate.confidence)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="detail-links">
+                  {selectedObservation.properties.sourceAssetUrl && (
+                    <a href={selectedObservation.properties.sourceAssetUrl} target="_blank" rel="noreferrer">
+                      Open source image
+                    </a>
+                  )}
+                  {selectedObservation.properties.sourceItemUrl && (
+                    <a href={selectedObservation.properties.sourceItemUrl} target="_blank" rel="noreferrer">
+                      Open STAC item
+                    </a>
+                  )}
+                </div>
+              </div>
+            ) : selectedPoint?.properties ? (
               <div className="detail-card detail-card-rich">
                 {selectedPoint.properties.thumbUrl && (
                   <img
@@ -621,7 +1045,7 @@ function App() {
                   </div>
                   <div>
                     <dt>Azimuth</dt>
-                    <dd>{selectedPoint.properties.azimuth ? `${selectedPoint.properties.azimuth}°` : 'n/a'}</dd>
+                    <dd>{formatDegrees(selectedPoint.properties.azimuth)}</dd>
                   </div>
                   <div>
                     <dt>Accuracy</dt>
@@ -630,10 +1054,29 @@ function App() {
                     </dd>
                   </div>
                   <div>
-                    <dt>License</dt>
-                    <dd>{selectedPoint.properties.license ?? 'n/a'}</dd>
+                    <dt>Sign observations</dt>
+                    <dd>{selectedSourceObservations.length}</dd>
                   </div>
                 </dl>
+                {selectedSourceObservations.length > 0 && (
+                  <div className="observation-list">
+                    {selectedSourceObservations.map((feature) => (
+                      <button
+                        key={feature.properties?.observationId}
+                        className="observation-card"
+                        onClick={() => setSelectedObservationId(feature.properties?.observationId ?? null)}
+                      >
+                        <img src={feature.properties?.cropUrl} alt={feature.properties?.displayLabel} />
+                        <div>
+                          <strong>{feature.properties?.displayLabel}</strong>
+                          <span>
+                            {feature.properties?.faceName} · {formatDegrees(feature.properties?.worldAzimuth)}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="detail-links">
                   {selectedPoint.properties.assetUrl && (
                     <a href={selectedPoint.properties.assetUrl} target="_blank" rel="noreferrer">
@@ -674,7 +1117,7 @@ function App() {
               </div>
             ) : (
               <div className="detail-empty">
-                <p>Click a route or a point on the map to inspect its metadata and preview thumbnail.</p>
+                <p>Click a route, panorama point, or sign marker to inspect linked metadata and inference results.</p>
               </div>
             )}
           </section>
