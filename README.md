@@ -1,45 +1,39 @@
 # Panoramax Sign Detection Display
 
-Prototype workspace for building an end-to-end street-sign detection workflow on top of Panoramax imagery.
+POC for downloading Panoramax street-level imagery, running French road-sign detection and classification, and reviewing the results in a lightweight map UI.
 
-Current scope:
+## Live App
 
-- download Panoramax 360 street-level imagery for a target area
-- derive cube-map and horizontal-face datasets from panoramas
-- run Panoramax road-sign detection and classification on horizontal faces
-- build a 2D coverage map UI for inspecting coverage, detections, and directional rays
+https://panoramax-sign-detection-display.julienigou33.workers.dev/
 
-## Structure
+## Screenshot
 
-- `scripts/`: Python utilities for download, cube extraction, horizontal-face subsets, and precomputed map assets
-- `coverage-map/`: React + MapLibre app for visualizing route coverage
-- `PANORAMAX_LEGE_CAP_FERRET_360.md`: notes about the initial Lège-Cap-Ferret dataset acquisition
+![Panoramax Sign Detection Display home page](docs/assets/homepage-hero.png)
 
-## Sign Inference
+## What It Does
 
-The current POC uses the published Panoramax Hugging Face models:
+- downloads Panoramax 360 street-level imagery for a target area
+- derives horizontal cube faces from panoramas for model inference
+- runs sign detection and sign classification on those derived views
+- builds a map interface to inspect route coverage, sign observations, and directional rays
+- provides an image-review page to browse source images, crops, predictions, and metadata
 
+## Current POC Stack
+
+- imagery source: Panoramax
 - detector: `Panoramax/detect_face_plate_sign`
 - classifier: `Panoramax/classify_fr_road_signs`
+- frontend: React, Vite, MapLibre
+- deployment: Cloudflare Pages
 
-Run the sample inference on the horizontal cube faces with:
+## Repository Layout
 
-```bash
-python3 -m pip install ultralytics==8.3.224 torchvision==0.22.1
-python3 scripts/run_sign_poc_inference.py
-python3 scripts/generate_sign_map_assets.py
-```
+- `coverage-map/`: deployed React app
+- `scripts/`: download, preprocessing, inference, and asset-generation scripts
+- `PANORAMAX_LEGE_CAP_FERRET_360.md`: notes about the first dataset acquisition
+- `SIGN_DETECTION_POC_PLAN.md`: implementation plan for the sign-review workflow
 
-That writes:
-
-- enriched observation records under `output/.../sign_inference/`
-- crop previews and map-ready sign layers under `coverage-map/public/data/`
-
-## Coverage Map
-
-The map app lives in `coverage-map/`.
-
-Run it with:
+## Run Locally
 
 ```bash
 cd coverage-map
@@ -47,7 +41,7 @@ pnpm install
 pnpm dev
 ```
 
-If you regenerate the Panoramax dataset and want to refresh the frontend map layers:
+## Refresh Data And Predictions
 
 ```bash
 python3 scripts/generate_coverage_map_assets.py
@@ -55,20 +49,21 @@ python3 scripts/run_sign_poc_inference.py
 python3 scripts/generate_sign_map_assets.py
 ```
 
-## Free Deployment
+This writes refreshed map assets, sign observations, crop previews, and review data into `coverage-map/public/data/`.
 
-The current app is a static Vite build with precomputed assets, so the simplest free deployment target is Cloudflare Pages.
+## Deploy
 
-Recommended Cloudflare Pages settings:
+The app is deployed as a static site on Cloudflare Pages.
 
-- repository: this GitHub repo
+Recommended Pages settings:
+
 - project root: `coverage-map`
 - build command: `pnpm build`
 - build output directory: `dist`
 - Node.js version: `22`
 
-See [coverage-map/CLOUDFLARE_PAGES.md](coverage-map/CLOUDFLARE_PAGES.md) for the exact setup steps.
+Detailed notes: [coverage-map/CLOUDFLARE_PAGES.md](coverage-map/CLOUDFLARE_PAGES.md)
 
 ## Notes
 
-Large downloaded imagery and intermediate outputs are intentionally ignored from Git. The repository keeps the code, docs, and lightweight prepared map assets needed to reproduce the workflow and run the UI.
+Large downloaded imagery and intermediate outputs are intentionally excluded from Git. The repository keeps the code, docs, and precomputed frontend assets needed to run the app and reproduce the workflow.
