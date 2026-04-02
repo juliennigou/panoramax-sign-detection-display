@@ -21,6 +21,8 @@ export type CoveragePointProperties = {
   collectionId: string
   provider: string
   providerColor: string
+  displayColor?: string
+  predictionLabel?: string | null
   datetime: string
   azimuth: number | null
   cameraModel: string | null

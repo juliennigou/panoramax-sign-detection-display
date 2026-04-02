@@ -320,6 +320,49 @@ function App() {
 
   const signData = loadState.status === 'ready' ? loadState.signData : null
 
+  const displayPoints = useMemo(() => {
+    if (!coverage) {
+      return null
+    }
+
+    if (coverageMode !== 'sample' || !signData) {
+      return coverage.points
+    }
+
+    const strongestBySourceId = new Map<string, { color: string; label: string | null; score: number }>()
+    for (const feature of signData.points.features) {
+      const properties = feature.properties
+      if (!properties?.sourceId) {
+        continue
+      }
+      const score = properties.classificationConfidence ?? properties.detectorScore
+      const current = strongestBySourceId.get(properties.sourceId)
+      if (!current || score > current.score) {
+        strongestBySourceId.set(properties.sourceId, {
+          color: properties.labelColor,
+          label: properties.classificationLabel ?? properties.displayLabel,
+          score,
+        })
+      }
+    }
+
+    return {
+      ...coverage.points,
+      features: coverage.points.features.map((feature) => {
+        const properties = feature.properties
+        const strongest = strongestBySourceId.get(properties.id)
+        return {
+          ...feature,
+          properties: {
+            ...properties,
+            displayColor: strongest?.color ?? properties.providerColor,
+            predictionLabel: strongest?.label ?? null,
+          },
+        }
+      }),
+    }
+  }, [coverage, coverageMode, signData])
+
   const observationsBySourceId = useMemo(() => {
     const map = new globalThis.Map<string, NonNullable<SignPreparedData>['points']['features']>()
     if (!signData) {
@@ -355,11 +398,11 @@ function App() {
   }, [observationsBySourceId])
 
   const selectedPoint = useMemo(() => {
-    if (!coverage || !selectedPointId) {
+    if (!displayPoints || !selectedPointId) {
       return null
     }
-    return coverage.points.features.find((feature) => feature.properties?.id === selectedPointId) ?? null
-  }, [coverage, selectedPointId])
+    return displayPoints.features.find((feature) => feature.properties?.id === selectedPointId) ?? null
+  }, [displayPoints, selectedPointId])
 
   const selectedCollection = useMemo(() => {
     if (!coverage || !selectedCollectionId) {
@@ -408,7 +451,7 @@ function App() {
 
     map.on('load', () => {
       map.addSource('coverage-routes', { type: 'geojson', data: coverage.lines })
-      map.addSource('coverage-points', { type: 'geojson', data: coverage.points })
+      map.addSource('coverage-points', { type: 'geojson', data: displayPoints ?? coverage.points })
       map.addSource('selected-route', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
       map.addSource('selected-point', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
       map.addSource('sign-rays', { type: 'geojson', data: signData?.rays ?? EMPTY_FEATURE_COLLECTION })
@@ -476,7 +519,7 @@ function App() {
         layout: { visibility: showPoints ? 'visible' : 'none' },
         paint: {
           'circle-radius': 4.2,
-          'circle-color': ['get', 'providerColor'],
+          'circle-color': ['coalesce', ['get', 'displayColor'], ['get', 'providerColor']],
           'circle-stroke-width': 1,
           'circle-stroke-color': '#11233b',
         },
@@ -638,7 +681,7 @@ function App() {
       map.remove()
       mapRef.current = null
     }
-  }, [appView, coverage, loadState, observationCountBySourceId, showPoints, showRoutes, signData])
+  }, [appView, coverage, displayPoints, loadState, observationCountBySourceId, showPoints, showRoutes, signData])
 
   useEffect(() => {
     const map = mapRef.current
@@ -647,7 +690,7 @@ function App() {
     }
 
     ;(map.getSource('coverage-routes') as GeoJSONSource | undefined)?.setData(coverage.lines)
-    ;(map.getSource('coverage-points') as GeoJSONSource | undefined)?.setData(coverage.points)
+    ;(map.getSource('coverage-points') as GeoJSONSource | undefined)?.setData(displayPoints ?? coverage.points)
     ;(map.getSource('sign-rays') as GeoJSONSource | undefined)?.setData(signData?.rays ?? EMPTY_FEATURE_COLLECTION)
     ;(map.getSource('sign-points') as GeoJSONSource | undefined)?.setData(signData?.points ?? EMPTY_FEATURE_COLLECTION)
 
@@ -724,6 +767,7 @@ function App() {
   }, [
     coverage,
     coverageMode,
+    displayPoints,
     selectedCollectionId,
     selectedObservationId,
     selectedPointId,
@@ -1079,7 +1123,7 @@ function App() {
                   <span className="detail-kicker">Panorama point</span>
                   <span
                     className="legend-dot"
-                    style={{ background: selectedPoint.properties.providerColor ?? '#0f4c5c' }}
+                    style={{ background: selectedPoint.properties.displayColor ?? selectedPoint.properties.providerColor ?? '#0f4c5c' }}
                   />
                 </div>
                 <strong>{formatProviderLabel(selectedPoint.properties.provider)}</strong>
