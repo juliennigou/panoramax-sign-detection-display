@@ -45,6 +45,20 @@ pnpm build
 pnpm preview
 ```
 
+## Deploy
+
+The recommended free deployment target is Cloudflare Pages.
+
+Use these settings:
+
+- framework preset: `Vite`
+- root directory: `coverage-map`
+- build command: `pnpm build`
+- output directory: `dist`
+- Node.js version: `22`
+
+Detailed steps are in [CLOUDFLARE_PAGES.md](./CLOUDFLARE_PAGES.md).
+
 ## Data Refresh
 
 If you regenerate the Panoramax sample and want the app to use the new map assets, run:

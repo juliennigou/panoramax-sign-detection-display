@@ -19,7 +19,7 @@ Current scope:
 
 The current POC uses the published Panoramax Hugging Face models:
 
-- detector: `Panoramax/detect_fr_road_signs_subsigns`
+- detector: `Panoramax/detect_face_plate_sign`
 - classifier: `Panoramax/classify_fr_road_signs`
 
 Run the sample inference on the horizontal cube faces with:
@@ -51,8 +51,23 @@ If you regenerate the Panoramax dataset and want to refresh the frontend map lay
 
 ```bash
 python3 scripts/generate_coverage_map_assets.py
+python3 scripts/run_sign_poc_inference.py
 python3 scripts/generate_sign_map_assets.py
 ```
+
+## Free Deployment
+
+The current app is a static Vite build with precomputed assets, so the simplest free deployment target is Cloudflare Pages.
+
+Recommended Cloudflare Pages settings:
+
+- repository: this GitHub repo
+- project root: `coverage-map`
+- build command: `pnpm build`
+- build output directory: `dist`
+- Node.js version: `22`
+
+See [coverage-map/CLOUDFLARE_PAGES.md](coverage-map/CLOUDFLARE_PAGES.md) for the exact setup steps.
 
 ## Notes
 
