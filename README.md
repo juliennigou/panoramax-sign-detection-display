@@ -64,6 +64,23 @@ Recommended Pages settings:
 
 Detailed notes: [coverage-map/CLOUDFLARE_PAGES.md](coverage-map/CLOUDFLARE_PAGES.md)
 
+## Acknowledgements
+
+This project builds on top of the Panoramax open street-level imagery ecosystem.
+
+- Panoramax: https://panoramax.fr/
+- Documentation: https://docs.panoramax.fr/
+- Federated catalog: https://panoramax.xyz/
+
+The current POC uses the published Panoramax Hugging Face models:
+
+- `Panoramax/detect_face_plate_sign`
+- `Panoramax/classify_fr_road_signs`
+
+## Data And Licensing
+
+Panoramax imagery and metadata remain subject to their original licenses and contributor terms. This repository contains the app code and precomputed review assets for the POC, not the full downloaded imagery corpus.
+
 ## Notes
 
 Large downloaded imagery and intermediate outputs are intentionally excluded from Git. The repository keeps the code, docs, and precomputed frontend assets needed to run the app and reproduce the workflow.
